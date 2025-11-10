@@ -7,11 +7,16 @@ const { generalLimiter } = require("./config/rateLimiter");
 
 // Import routes
 const authRoutes = require("./routes/authRoutes");
-// ... other routes
+const userRoutes = require("./routes/userRoutes");
+const clientRoutes = require("./routes/clientRoutes");
+const invoiceRoutes = require("./routes/invoiceRoutes");
+const inventoryRoutes = require("./routes/inventoryRoutes");
+const paymentRoutes = require("./routes/paymentRoutes");
+const analyticsRoutes = require("./routes/analyticsRoutes");
 
 const app = express();
 
-// Security middleware
+// Security & Middleware
 app.use(helmet());
 app.use(
   cors({
@@ -19,15 +24,9 @@ app.use(
     credentials: true,
   })
 );
-
-// Logging
 app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
-
-// Body parsing
 app.use(bodyParser.json({ limit: "10mb" }));
 app.use(bodyParser.urlencoded({ extended: true, limit: "10mb" }));
-
-// Rate limiting
 app.use(generalLimiter);
 
 // Health check
@@ -36,14 +35,19 @@ app.get("/health", (req, res) => {
     success: true,
     message: "Server is running",
     timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV,
+    uptime: process.uptime(),
   });
 });
 
 // API Routes
 app.use("/api/auth", authRoutes);
-// app.use('/api/users', userRoutes);
-// app.use('/api/clients', clientRoutes);
-// ... other routes
+app.use("/api/users", userRoutes);
+app.use("/api/clients", clientRoutes);
+app.use("/api/invoices", invoiceRoutes);
+app.use("/api/inventory", inventoryRoutes);
+app.use("/api/payments", paymentRoutes);
+app.use("/api/analytics", analyticsRoutes);
 
 // 404 handler
 app.use((req, res) => {
