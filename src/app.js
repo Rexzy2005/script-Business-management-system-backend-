@@ -18,13 +18,33 @@ const analyticsRoutes = require("./routes/analyticsRoutes");
 
 const app = express();
 
-// Security & Middleware
+// ---------------------------
+// ✅ Security & Middleware
+// ---------------------------
 app.use(helmet());
+
+// Define allowed origins dynamically
+const allowedOrigins = [
+  "http://localhost:8080", // dev frontend
+  "https://script-frontend.vercel.app", // your production frontend (replace if different)
+  "https://smart-business-management-system.vercel.app", // alternate vercel domain if applicable
+];
+
+// Dynamic CORS setup
 app.use(
   cors({
-    origin: "*", // ✅ allow requests from all origins
+    origin: function (origin, callback) {
+      // Allow requests with no origin (like mobile apps or curl)
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.warn(`🚫 Blocked by CORS: ${origin}`);
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true,
   })
 );
 
@@ -33,32 +53,39 @@ app.use(bodyParser.json({ limit: "10mb" }));
 app.use(bodyParser.urlencoded({ extended: true, limit: "10mb" }));
 app.use(generalLimiter);
 
-// Health check
+// ---------------------------
+// ✅ Health Check Route
+// ---------------------------
 app.get("/health", (req, res) => {
   res.json({
     success: true,
     message: "Server is running",
-    timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV,
+    timestamp: new Date().toISOString(),
     uptime: process.uptime(),
   });
 });
 
-// API Routes
+// ---------------------------
+// ✅ API Routes
+// ---------------------------
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/clients", clientRoutes);
 app.use("/api/invoices", invoiceRoutes);
 app.use("/api/inventory", inventoryRoutes);
-// Backwards-compatible alias: frontend expects /api/products in some places
+
+// Frontend backward compatibility (some old code may use /products)
 app.use("/api/products", inventoryRoutes);
-// Sales & Expenses
+
 app.use("/api/sales", salesRoutes);
 app.use("/api/expenses", expenseRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/analytics", analyticsRoutes);
 
-// 404 handler
+// ---------------------------
+// ✅ 404 and Error Handling
+// ---------------------------
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -66,13 +93,12 @@ app.use((req, res) => {
   });
 });
 
-// Error handler
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error("🔥 Error:", err.stack);
   res.status(err.status || 500).json({
     success: false,
     message: err.message || "Internal server error",
-    error: process.env.NODE_ENV === "development" ? err : {},
+    ...(process.env.NODE_ENV === "development" && { stack: err.stack }),
   });
 });
 
