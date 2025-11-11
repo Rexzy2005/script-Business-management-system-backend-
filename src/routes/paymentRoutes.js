@@ -11,7 +11,7 @@ const {
   refundPayment,
   getPaymentStats,
 } = require("../controllers/paymentController");
-const { authenticate } = require("../middlewares/authMiddleware");
+const { authenticate, optionalAuthenticate } = require("../middlewares/authMiddleware");
 const { paymentLimiter } = require("../config/rateLimiter");
 const {
   validateObjectId,
@@ -28,6 +28,45 @@ router.post(
   initializeFlutterwavePayment
 );
 router.post("/flutterwave/verify", authenticate, verifyFlutterwavePayment);
+
+// Compatibility route for /api/payments/initialize
+// This handles payment initialization requests
+// Note: For signup, use /api/auth/register-with-payment instead
+router.post(
+  "/initialize",
+  paymentLimiter,
+  optionalAuthenticate,
+  async (req, res) => {
+    try {
+      // Check if it's a subscription payment
+      const { planType, subscription } = req.body;
+      
+      if (req.userId && (subscription || planType)) {
+        // Authenticated subscription payment
+        const subscriptionController = require("../controllers/subscriptionController");
+        return subscriptionController.initializeSubscription(req, res);
+      }
+      
+      if (req.userId) {
+        // Authenticated invoice payment
+        return initializeFlutterwavePayment(req, res);
+      }
+      
+      // Not authenticated - return helpful error
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required. For signup, please use /api/auth/register-with-payment",
+        code: "AUTHENTICATION_REQUIRED",
+      });
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+        message: "Error initializing payment",
+        error: error.message,
+      });
+    }
+  }
+);
 
 // Stats route
 router.get("/stats", authenticate, validateDateRange, getPaymentStats);

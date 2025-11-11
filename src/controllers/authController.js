@@ -1,5 +1,6 @@
 const User = require("../models/User");
 const Payment = require("../models/Payment");
+const Subscription = require("../models/Subscription");
 const { generateTokens, verifyRefreshToken } = require("../utils/jwt");
 const crypto = require("crypto");
 const axios = require("axios");
@@ -613,12 +614,12 @@ const verifyEmail = async (req, res) => {
 
 /**
  * @route   POST /api/auth/register-with-payment
- * @desc    Register a new user and initiate premium plan payment (200 Naira)
+ * @desc    Register a new user and initiate premium plan payment (200 Naira monthly or 2000 Naira yearly)
  * @access  Public
  */
 const registerWithPayment = async (req, res) => {
   try {
-    const { businessName, email, phone, password } = req.body;
+    const { businessName, email, phone, password, planType = "monthly" } = req.body;
 
     // Validate required fields
     if (!businessName || !email || !password) {
@@ -677,9 +678,18 @@ const registerWithPayment = async (req, res) => {
       },
     });
 
+    // Validate plan type
+    if (!["monthly", "yearly"].includes(planType)) {
+      await User.findByIdAndDelete(user._id);
+      return res.status(400).json({
+        success: false,
+        message: "Plan type must be 'monthly' or 'yearly'",
+      });
+    }
+
     // Generate transaction reference for payment
     const tx_ref = `SIGNUP-${Date.now()}-${user._id.toString().slice(-6)}`;
-    const amount = 200; // 200 Naira premium plan
+    const amount = planType === "yearly" ? 2000 : 200; // 2000 Naira yearly or 200 Naira monthly
 
     // Initialize Flutterwave payment
     const flutterwavePayload = {
@@ -693,14 +703,15 @@ const registerWithPayment = async (req, res) => {
         name: businessName.trim(),
       },
       customizations: {
-        title: "Premium Plan Signup - Script Business Management",
-        description: "Premium plan subscription payment (₦200)",
+        title: `${planType === "yearly" ? "Yearly" : "Monthly"} Premium Plan Signup - Script Business Management`,
+        description: `Premium plan subscription payment (₦${amount})`,
         logo: process.env.BUSINESS_LOGO || "",
       },
       meta: {
         user_id: user._id.toString(),
         signup: true,
         plan: "premium",
+        planType: planType,
       },
     };
 
@@ -750,6 +761,17 @@ const registerWithPayment = async (req, res) => {
     user.plan.paymentReference = tx_ref;
     await user.save();
 
+    // Create subscription record
+    const subscription = await Subscription.create({
+      user: user._id,
+      planType: planType,
+      amount: amount,
+      status: "pending",
+      paymentReference: tx_ref,
+      startDate: new Date(),
+      endDate: new Date(),
+    });
+
     // Create pending payment record
     await Payment.create({
       user: user._id,
@@ -764,6 +786,8 @@ const registerWithPayment = async (req, res) => {
       metadata: {
         signup: true,
         plan: "premium",
+        planType: planType,
+        subscriptionId: subscription._id.toString(),
       },
     });
 
@@ -846,8 +870,20 @@ const verifySignupPayment = async (req, res) => {
       });
     }
 
-    // Verify amount matches (200 Naira)
-    const expectedAmount = 200;
+    // Find subscription by payment reference
+    const subscription = await Subscription.findOne({
+      paymentReference: tx_ref,
+    });
+
+    if (!subscription) {
+      return res.status(404).json({
+        success: false,
+        message: "Subscription not found for this payment reference",
+      });
+    }
+
+    // Verify amount matches (200 for monthly, 2000 for yearly)
+    const expectedAmount = subscription.amount;
     if (parseFloat(transactionData.amount) !== expectedAmount) {
       return res.status(400).json({
         success: false,
@@ -855,8 +891,8 @@ const verifySignupPayment = async (req, res) => {
       });
     }
 
-    // Find user by payment reference
-    const user = await User.findOne({ "plan.paymentReference": tx_ref });
+    // Find user by subscription
+    const user = await User.findById(subscription.user);
 
     if (!user) {
       return res.status(404).json({
@@ -883,7 +919,7 @@ const verifySignupPayment = async (req, res) => {
     }
 
     // Find and update payment record
-    const payment = await Payment.findOne({ transactionRef: tx_ref });
+    let payment = await Payment.findOne({ transactionRef: tx_ref });
     if (payment) {
       payment.status = "completed";
       payment.externalRef = transaction_id;
@@ -902,7 +938,32 @@ const verifySignupPayment = async (req, res) => {
       }
       
       await payment.save();
+    } else {
+      // Create payment record if it doesn't exist
+      payment = await Payment.create({
+        user: subscription.user,
+        amount: subscription.amount,
+        currency: "NGN",
+        method: "flutterwave",
+        gateway: "flutterwave",
+        transactionRef: tx_ref,
+        externalRef: transaction_id,
+        status: "completed",
+        gatewayResponse: verificationResponse.data,
+        completedAt: new Date(),
+        verified: true,
+        verifiedAt: new Date(),
+        metadata: {
+          signup: true,
+          plan: "premium",
+          planType: subscription.planType,
+          subscriptionId: subscription._id.toString(),
+        },
+      });
     }
+
+    // Activate subscription
+    await subscription.activate(payment._id, transaction_id);
 
     // Activate user account
     user.status = "active";
@@ -910,18 +971,11 @@ const verifySignupPayment = async (req, res) => {
     user.plan.type = "premium";
     user.plan.paymentTransactionId = transaction_id;
     user.plan.paymentVerifiedAt = new Date();
-    user.plan.startDate = new Date();
-    // Set plan end date to 1 year from now (or adjust as needed)
-    user.plan.endDate = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+    user.plan.startDate = subscription.startDate;
+    user.plan.endDate = subscription.endDate;
     
     // Set premium plan features
-    user.plan.features = {
-      maxInvoices: -1, // Unlimited
-      maxClients: -1, // Unlimited
-      maxInventoryItems: -1, // Unlimited
-      advancedAnalytics: true,
-      multiUser: true,
-    };
+    user.plan.features = subscription.features;
 
     await user.save();
 

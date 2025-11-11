@@ -1,0 +1,1 @@
+remove the settings and preference from the profile page and take it to the settings page and the make the settings page functional then remove the unessesary things in the app functional, then add a language preference for hause, english, and youroba, igbo ready for the backend integration for the languages

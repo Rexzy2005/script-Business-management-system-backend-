@@ -6,6 +6,7 @@ const Client = require("./Client");
 const { Invoice, InvoiceItem } = require("./Invoice");
 const Inventory = require("./Inventory");
 const Payment = require("./Payment");
+const Subscription = require("./Subscription");
 
 module.exports = {
   User,
@@ -14,4 +15,5 @@ module.exports = {
   InvoiceItem,
   Inventory,
   Payment,
+  Subscription,
 };
