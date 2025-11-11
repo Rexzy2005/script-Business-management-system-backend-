@@ -1,4 +1,5 @@
 const Inventory = require("../models/Inventory");
+const Sale = require("../models/Sale");
 
 /**
  * @route   POST /api/inventory
@@ -7,15 +8,42 @@ const Inventory = require("../models/Inventory");
  */
 const createInventoryItem = async (req, res) => {
   try {
+    // Normalize frontend payload to backend schema names
+    const generateSKU = (name) => {
+      if (!name) return `SKU-${Date.now()}`;
+      const base = name
+        .toString()
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      return `${base}-${Math.floor(Math.random() * 9000) + 1000}`;
+    };
+
     const itemData = {
-      ...req.body,
+      // map common frontend fields to schema
+      sku: req.body.sku || generateSKU(req.body.name || req.body.productName),
+      name: req.body.name || req.body.productName || "Unnamed product",
+      description: req.body.description || req.body.details || "",
+      category: (req.body.category || "").trim() || "uncategorized",
+      barcode: req.body.barcode || req.body.upc || undefined,
+      unitCost: req.body.costPrice ?? req.body.unitCost ?? 0,
+      retailPrice: req.body.unitPrice ?? req.body.retailPrice ?? 0,
+      quantity:
+        req.body.quantityInStock ?? req.body.qty ?? req.body.quantity ?? 0,
+      unit: req.body.unitType || req.body.unit || "unit",
+      reorderPoint: req.body.lowStockThreshold ?? req.body.reorderPoint ?? 10,
+      reorderQuantity: req.body.reorderQuantity ?? req.body.reorderQty ?? 50,
+      supplier: req.body.supplier || {},
+      images: req.body.images || [],
+      tags: req.body.tags || [],
       user: req.userId,
     };
 
     // Check if SKU already exists for this user
     const existingItem = await Inventory.findOne({
       user: req.userId,
-      sku: req.body.sku,
+      sku: itemData.sku,
     });
 
     if (existingItem) {
@@ -388,6 +416,55 @@ const adjustStock = async (req, res) => {
 };
 
 /**
+ * @route   PATCH /api/inventory/:id/stock
+ * @desc    Update stock by a delta (positive to add, negative to remove)
+ * @access  Private
+ */
+const updateStock = async (req, res) => {
+  try {
+    const { quantityChange, reason = "" } = req.body;
+
+    if (typeof quantityChange === "undefined" || quantityChange === null) {
+      return res.status(400).json({
+        success: false,
+        message: "quantityChange is required",
+      });
+    }
+
+    const item = await Inventory.findOne({
+      _id: req.params.id,
+      user: req.userId,
+    });
+    if (!item) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Inventory item not found" });
+    }
+
+    if (quantityChange > 0) {
+      await item.addStock(quantityChange, "manual", null, reason, req.userId);
+    } else if (quantityChange < 0) {
+      const removeQty = Math.abs(quantityChange);
+      // reduceStock will throw if insufficient stock
+      await item.reduceStock(removeQty, "manual", null, reason, req.userId);
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Stock updated successfully",
+      data: { item },
+    });
+  } catch (error) {
+    console.error("Update stock error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error updating stock",
+      error: error.message,
+    });
+  }
+};
+
+/**
  * @route   GET /api/inventory/low-stock
  * @desc    Get low stock items
  * @access  Private
@@ -498,13 +575,105 @@ const getInventoryStats = async (req, res) => {
       { $sort: { totalValue: -1 } },
     ]);
 
+    // Additional overview fields expected by frontend
+    const totalProducts = await Inventory.countDocuments({ user: req.userId });
+    const totalQuantityAgg = await Inventory.aggregate([
+      { $match: { user: req.userId } },
+      { $group: { _id: null, totalQty: { $sum: "$quantity" } } },
+    ]);
+    const totalQuantity =
+      (totalQuantityAgg[0] && totalQuantityAgg[0].totalQty) || 0;
+
+    // Total revenue from sales (all time)
+    let totalRevenue = 0;
+    try {
+      const revAgg = await Sale.aggregate([
+        { $match: { user: req.userId } },
+        { $group: { _id: null, totalRevenue: { $sum: "$total" } } },
+      ]);
+      totalRevenue = (revAgg[0] && revAgg[0].totalRevenue) || 0;
+    } catch (e) {
+      console.warn("Failed to compute total revenue:", e.message);
+    }
+
+    // Top selling products by revenue and units (based on Sale.items)
+    let topSelling = [];
+    try {
+      const topAgg = await Sale.aggregate([
+        { $match: { user: req.userId } },
+        { $unwind: "$items" },
+        {
+          $group: {
+            _id: { sku: "$items.sku", name: "$items.name" },
+            totalSold: { $sum: "$items.qty" },
+            totalRevenue: { $sum: "$items.lineTotal" },
+          },
+        },
+        { $sort: { totalRevenue: -1 } },
+        { $limit: 10 },
+      ]);
+
+      topSelling = topAgg.map((t) => ({
+        _id: t._id.sku || t._id.name,
+        name: t._id.name,
+        analytics: { totalRevenue: t.totalRevenue, totalSold: t.totalSold },
+      }));
+    } catch (e) {
+      console.warn("Failed to compute top selling products:", e.message);
+    }
+
+    // Monthly sales for last 12 months
+    let monthly = [];
+    try {
+      const now = new Date();
+      const start = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+      const monthlyAgg = await Sale.aggregate([
+        { $match: { user: req.userId, createdAt: { $gte: start } } },
+        {
+          $group: {
+            _id: { $dateToString: { format: "%Y-%m", date: "$createdAt" } },
+            sales: { $sum: "$total" },
+          },
+        },
+        { $sort: { _id: 1 } },
+      ]);
+
+      // build last 12 months labels
+      const months = [];
+      for (let i = 11; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        months.push(`${y}-${m}`);
+      }
+
+      const mapAgg = {};
+      for (const it of monthlyAgg) mapAgg[it._id] = Number(it.sales) || 0;
+
+      monthly = months.map((mm) => ({
+        month: mm,
+        sales: mapAgg[mm] || 0,
+        target: 0,
+      }));
+    } catch (e) {
+      console.warn("Failed to compute monthly sales:", e.message);
+    }
+
     res.status(200).json({
       success: true,
       data: {
-        value,
-        lowStockCount,
-        outOfStockCount,
+        overview: {
+          totalProducts,
+          totalQuantity,
+          totalValue:
+            (value && (value.totalRetailValue || value.totalCostValue)) || 0,
+          lowStockCount,
+          outOfStockCount,
+          totalRevenue,
+        },
         byCategory: categoryBreakdown,
+        topSelling,
+        monthly,
       },
     });
   } catch (error) {
@@ -571,4 +740,5 @@ module.exports = {
   getCategories,
   getInventoryStats,
   searchInventory,
+  updateStock,
 };

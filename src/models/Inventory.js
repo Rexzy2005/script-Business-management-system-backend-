@@ -217,6 +217,8 @@ const inventorySchema = new mongoose.Schema(
             "adjustment",
             "damaged",
             "transfer",
+            // allow manual adjustments recorded by API
+            "manual",
           ],
           required: true,
         },
@@ -314,6 +316,31 @@ inventorySchema.virtual("primaryImage").get(function () {
     : this.images.length > 0
     ? this.images[0].url
     : null;
+});
+
+// Virtual alias: qty -> quantity (frontend expects `qty`)
+inventorySchema.virtual("qty").get(function () {
+  return this.quantity;
+});
+
+// Virtual alias: value -> retailValue (frontend expects `value`)
+inventorySchema.virtual("value").get(function () {
+  return this.retailValue;
+});
+
+// Virtual alias: unitType -> unit
+inventorySchema.virtual("unitType").get(function () {
+  return this.unit;
+});
+
+// Virtual alias: pricePerPiece -> retailPrice
+inventorySchema.virtual("pricePerPiece").get(function () {
+  return this.retailPrice;
+});
+
+// Virtual alias: bulkPrice -> wholesalePrice
+inventorySchema.virtual("bulkPrice").get(function () {
+  return this.wholesalePrice || this.discountPrice || 0;
 });
 
 // Pre-save middleware to update status based on quantity
@@ -456,8 +483,13 @@ inventorySchema.statics.getItemsToReorder = function (userId) {
 
 // Static method to calculate total inventory value
 inventorySchema.statics.getTotalInventoryValue = async function (userId) {
+  // Ensure we pass an ObjectId when userId is a string. Some mongoose versions
+  // require `new mongoose.Types.ObjectId(...)` instead of calling as a function.
+  const matchUser =
+    typeof userId === "string" ? new mongoose.Types.ObjectId(userId) : userId;
+
   const result = await this.aggregate([
-    { $match: { user: mongoose.Types.ObjectId(userId), status: "active" } },
+    { $match: { user: matchUser, status: "active" } },
     {
       $group: {
         _id: null,

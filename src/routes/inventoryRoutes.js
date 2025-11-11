@@ -15,6 +15,7 @@ const {
   getCategories,
   getInventoryStats,
   searchInventory,
+  updateStock,
 } = require("../controllers/inventoryController");
 const { authenticate } = require("../middlewares/authMiddleware");
 const {
@@ -62,5 +63,7 @@ router.post(
   validateObjectId("id"),
   adjustStock
 );
+// Backwards-compatible endpoint used by frontend: PATCH /api/products/:id/stock
+router.patch("/:id/stock", authenticate, validateObjectId("id"), updateStock);
 
 module.exports = router;
