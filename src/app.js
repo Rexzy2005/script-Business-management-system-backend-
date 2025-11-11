@@ -19,6 +19,12 @@ const analyticsRoutes = require("./routes/analyticsRoutes");
 const app = express();
 
 // ---------------------------
+// ✅ Trust Proxy (Required for Render.com and other proxies)
+// ---------------------------
+// Enable trust proxy to work behind reverse proxies (Render.com, Nginx, etc.)
+app.set('trust proxy', true);
+
+// ---------------------------
 // ✅ Security & Middleware
 // ---------------------------
 app.use(helmet());

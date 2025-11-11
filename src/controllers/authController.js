@@ -621,11 +621,11 @@ const registerWithPayment = async (req, res) => {
     const { businessName, email, phone, password } = req.body;
 
     // Validate required fields
-    if (!businessName || !email || !phone || !password) {
+    if (!businessName || !email || !password) {
       return res.status(400).json({
         success: false,
         message:
-          "Please provide all required fields: businessName, email, phone, password",
+          "Please provide all required fields: businessName, email, password",
       });
     }
 
@@ -634,6 +634,21 @@ const registerWithPayment = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Password must be at least 8 characters long",
+      });
+    }
+
+    // Validate and sanitize phone number (make it optional but validate format if provided)
+    let phoneNumber = phone ? phone.trim() : "";
+    // If phone is provided, validate it's actually a phone number (not an email)
+    if (phoneNumber && phoneNumber.includes("@")) {
+      // Looks like an email was sent instead of phone - make it empty
+      phoneNumber = "";
+    }
+    // Basic phone validation - allow empty or valid phone format
+    if (phoneNumber && !/^[0-9+\-\s()]+$/.test(phoneNumber)) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide a valid phone number or leave it empty",
       });
     }
 
@@ -650,7 +665,7 @@ const registerWithPayment = async (req, res) => {
     const user = await User.create({
       businessName: businessName.trim(),
       email: email.toLowerCase(),
-      phone: phone.trim(),
+      phone: phoneNumber || "0000000000", // Use placeholder if no phone provided
       password,
       role: "owner",
       isAdmin: false,
@@ -674,7 +689,7 @@ const registerWithPayment = async (req, res) => {
       redirect_url: `${process.env.FRONTEND_URL || "http://localhost:3000"}/signup/payment-verify`,
       customer: {
         email: email.toLowerCase(),
-        phone_number: phone.trim(),
+        phone_number: phoneNumber || "2340000000000", // Use placeholder if no phone
         name: businessName.trim(),
       },
       customizations: {
@@ -750,7 +765,7 @@ const registerWithPayment = async (req, res) => {
           paymentLink: flutterwaveResponse.data.data?.link,
           customer: {
             email: email.toLowerCase(),
-            phone: phone.trim(),
+            phone: phoneNumber || "",
             name: businessName.trim(),
           },
         },
