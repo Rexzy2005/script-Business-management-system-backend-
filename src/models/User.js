@@ -74,7 +74,7 @@ const userSchema = new mongoose.Schema(
     plan: {
       type: {
         type: String,
-        enum: ["free", "basic", "professional", "enterprise"],
+        enum: ["free", "basic", "professional", "enterprise", "premium"],
         default: "free",
       },
       startDate: {
@@ -84,8 +84,8 @@ const userSchema = new mongoose.Schema(
       endDate: Date,
       status: {
         type: String,
-        enum: ["active", "expired", "cancelled"],
-        default: "active",
+        enum: ["active", "expired", "cancelled", "pending"],
+        default: "pending",
       },
       features: {
         maxInvoices: { type: Number, default: 10 },
@@ -94,13 +94,17 @@ const userSchema = new mongoose.Schema(
         advancedAnalytics: { type: Boolean, default: false },
         multiUser: { type: Boolean, default: false },
       },
+      // Payment tracking for premium signup
+      paymentReference: String, // Flutterwave transaction reference
+      paymentTransactionId: String, // Flutterwave transaction ID
+      paymentVerifiedAt: Date,
     },
 
     // Account Status
     status: {
       type: String,
       enum: ["active", "inactive", "suspended", "pending"],
-      default: "active",
+      default: "pending", // Changed to pending - user must pay before activation
     },
     emailVerified: {
       type: Boolean,
