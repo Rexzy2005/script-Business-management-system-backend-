@@ -6,12 +6,12 @@
  * Validate registration data
  */
 const validateRegister = (req, res, next) => {
-  const { name, email, phone, password } = req.body;
+  const { businessName, email, phone, password } = req.body;
   const errors = [];
 
-  // Name validation
-  if (!name || name.trim().length < 2) {
-    errors.push("Name must be at least 2 characters long");
+  // Business name validation
+  if (!businessName || businessName.trim().length < 2) {
+    errors.push("Business name must be at least 2 characters long");
   }
 
   // Email validation

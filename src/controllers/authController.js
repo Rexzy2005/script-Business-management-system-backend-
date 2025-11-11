@@ -4,29 +4,19 @@ const crypto = require("crypto");
 
 /**
  * @route   POST /api/auth/register
- * @desc    Register a new user
+ * @desc    Register a new user with business name, email, phone, and password
  * @access  Public
  */
 const register = async (req, res) => {
   try {
-    const {
-      name,
-      email,
-      phone,
-      password,
-      businessName,
-      businessEmail,
-      businessPhone,
-      address,
-      industry,
-    } = req.body;
+    const { businessName, email, phone, password } = req.body;
 
     // Validate required fields
-    if (!name || !email || !phone || !password) {
+    if (!businessName || !email || !phone || !password) {
       return res.status(400).json({
         success: false,
         message:
-          "Please provide all required fields: name, email, phone, password",
+          "Please provide all required fields: businessName, email, phone, password",
       });
     }
 
@@ -41,7 +31,7 @@ const register = async (req, res) => {
     // Check if user already exists
     const existingUser = await User.findOne({ email: email.toLowerCase() });
     if (existingUser) {
-      return res.status(400).json({
+      return res.status(409).json({
         success: false,
         message: "User with this email already exists",
       });
@@ -49,17 +39,10 @@ const register = async (req, res) => {
 
     // Create user
     const user = await User.create({
-      name,
+      businessName: businessName.trim(),
       email: email.toLowerCase(),
-      phone,
+      phone: phone.trim(),
       password,
-      businessInfo: {
-        businessName: businessName || name,
-        businessEmail: businessEmail || email,
-        businessPhone: businessPhone || phone,
-        address: address || {},
-        industry: industry || "other",
-      },
       role: "owner", // First user is owner
       isAdmin: false,
     });
@@ -324,12 +307,12 @@ const getProfile = async (req, res) => {
 
 /**
  * @route   PUT /api/auth/profile
- * @desc    Update user profile
+ * @desc    Update user profile and business info
  * @access  Private
  */
 const updateProfile = async (req, res) => {
   try {
-    const { name, phone, businessInfo, settings } = req.body;
+    const { businessName, phone, businessInfo, settings } = req.body;
 
     const user = await User.findById(req.userId);
 
@@ -340,15 +323,19 @@ const updateProfile = async (req, res) => {
       });
     }
 
-    // Update fields
-    if (name) user.name = name;
-    if (phone) user.phone = phone;
+    // Update core fields
+    if (businessName) user.businessName = businessName.trim();
+    if (phone) user.phone = phone.trim();
+    
+    // Update business profile info
     if (businessInfo) {
       user.businessInfo = {
         ...user.businessInfo,
         ...businessInfo,
       };
     }
+    
+    // Update settings
     if (settings) {
       user.settings = {
         ...user.settings,
