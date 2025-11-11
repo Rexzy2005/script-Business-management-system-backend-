@@ -1,6 +1,8 @@
 const User = require("../models/User");
+const Payment = require("../models/Payment");
 const { generateTokens, verifyRefreshToken } = require("../utils/jwt");
 const crypto = require("crypto");
+const axios = require("axios");
 
 /**
  * @route   POST /api/auth/register
@@ -122,14 +124,6 @@ const login = async (req, res) => {
       });
     }
 
-    // Check account status
-    if (user.status !== "active") {
-      return res.status(403).json({
-        success: false,
-        message: `Account is ${user.status}. Please contact support.`,
-      });
-    }
-
     // Verify password
     const isPasswordValid = await user.comparePassword(password);
 
@@ -146,6 +140,23 @@ const login = async (req, res) => {
     // Reset login attempts on successful login
     if (user.loginAttempts > 0) {
       await user.resetLoginAttempts();
+    }
+
+    // Check account status - user must have paid (status must be active)
+    if (user.status === "pending") {
+      return res.status(403).json({
+        success: false,
+        message: "Please complete your premium plan payment to activate your account. If you've already paid, please wait a moment for verification.",
+        code: "PAYMENT_PENDING",
+        requiresPayment: true,
+      });
+    }
+
+    if (user.status !== "active") {
+      return res.status(403).json({
+        success: false,
+        message: `Account is ${user.status}. Please contact support.`,
+      });
     }
 
     // Update last login
@@ -221,7 +232,16 @@ const refreshToken = async (req, res) => {
       });
     }
 
-    // Check account status
+    // Check account status - user must have paid (status must be active)
+    if (user.status === "pending") {
+      return res.status(403).json({
+        success: false,
+        message: "Please complete your premium plan payment to activate your account.",
+        code: "PAYMENT_PENDING",
+        requiresPayment: true,
+      });
+    }
+
     if (user.status !== "active") {
       return res.status(403).json({
         success: false,
@@ -591,8 +611,316 @@ const verifyEmail = async (req, res) => {
   }
 };
 
+/**
+ * @route   POST /api/auth/register-with-payment
+ * @desc    Register a new user and initiate premium plan payment (500 Naira)
+ * @access  Public
+ */
+const registerWithPayment = async (req, res) => {
+  try {
+    const { businessName, email, phone, password } = req.body;
+
+    // Validate required fields
+    if (!businessName || !email || !phone || !password) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Please provide all required fields: businessName, email, phone, password",
+      });
+    }
+
+    // Validate password strength
+    if (password.length < 8) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 8 characters long",
+      });
+    }
+
+    // Check if user already exists
+    const existingUser = await User.findOne({ email: email.toLowerCase() });
+    if (existingUser) {
+      return res.status(409).json({
+        success: false,
+        message: "User with this email already exists",
+      });
+    }
+
+    // Create user with pending status (will be activated after payment)
+    const user = await User.create({
+      businessName: businessName.trim(),
+      email: email.toLowerCase(),
+      phone: phone.trim(),
+      password,
+      role: "owner",
+      isAdmin: false,
+      status: "pending", // Account pending until payment is verified
+      plan: {
+        type: "premium",
+        status: "pending",
+        startDate: new Date(),
+      },
+    });
+
+    // Generate transaction reference for payment
+    const tx_ref = `SIGNUP-${Date.now()}-${user._id.toString().slice(-6)}`;
+    const amount = 500; // 500 Naira premium plan
+
+    // Initialize Flutterwave payment
+    const flutterwavePayload = {
+      tx_ref: tx_ref,
+      amount: amount,
+      currency: "NGN",
+      redirect_url: `${process.env.FRONTEND_URL || "http://localhost:3000"}/signup/payment-verify`,
+      customer: {
+        email: email.toLowerCase(),
+        phone_number: phone.trim(),
+        name: businessName.trim(),
+      },
+      customizations: {
+        title: "Premium Plan Signup - Script Business Management",
+        description: "Premium plan subscription payment (₦500)",
+        logo: process.env.BUSINESS_LOGO || "",
+      },
+      meta: {
+        user_id: user._id.toString(),
+        signup: true,
+        plan: "premium",
+      },
+    };
+
+    // Call Flutterwave API to initialize payment
+    let flutterwaveResponse;
+    try {
+      flutterwaveResponse = await axios.post(
+        "https://api.flutterwave.com/v3/payments",
+        flutterwavePayload,
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.FLUTTERWAVE_SECRET_KEY}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+    } catch (error) {
+      console.error("Flutterwave API error:", error.response?.data || error.message);
+      // Delete the user if payment initialization fails
+      await User.findByIdAndDelete(user._id);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to initialize payment. Please try again.",
+        error: error.response?.data?.message || error.message,
+      });
+    }
+
+    // Store payment reference in user
+    user.plan.paymentReference = tx_ref;
+    await user.save();
+
+    // Create pending payment record
+    await Payment.create({
+      user: user._id,
+      amount: amount,
+      currency: "NGN",
+      method: "flutterwave",
+      gateway: "flutterwave",
+      transactionRef: tx_ref,
+      externalRef: flutterwaveResponse.data.data?.id || null,
+      status: "pending",
+      gatewayResponse: flutterwaveResponse.data,
+      metadata: {
+        signup: true,
+        plan: "premium",
+      },
+    });
+
+    // Remove password from response
+    const userResponse = user.toObject();
+    delete userResponse.password;
+
+    res.status(201).json({
+      success: true,
+      message: "User registered. Please complete payment to activate your account.",
+      data: {
+        user: userResponse,
+        payment: {
+          tx_ref: tx_ref,
+          amount: amount,
+          currency: "NGN",
+          paymentLink: flutterwaveResponse.data.data?.link,
+          customer: {
+            email: email.toLowerCase(),
+            phone: phone.trim(),
+            name: businessName.trim(),
+          },
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Register with payment error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error registering user",
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @route   POST /api/auth/verify-signup-payment
+ * @desc    Verify signup payment and activate user account
+ * @access  Public
+ */
+const verifySignupPayment = async (req, res) => {
+  try {
+    const { transaction_id, tx_ref } = req.body;
+
+    if (!transaction_id || !tx_ref) {
+      return res.status(400).json({
+        success: false,
+        message: "Transaction ID and reference are required",
+      });
+    }
+
+    // Verify payment with Flutterwave
+    let verificationResponse;
+    try {
+      verificationResponse = await axios.get(
+        `https://api.flutterwave.com/v3/transactions/${transaction_id}/verify`,
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.FLUTTERWAVE_SECRET_KEY}`,
+          },
+        }
+      );
+    } catch (error) {
+      console.error("Flutterwave verification error:", error.response?.data || error.message);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to verify payment with Flutterwave",
+        error: error.response?.data?.message || error.message,
+      });
+    }
+
+    const { data: transactionData } = verificationResponse.data;
+
+    // Check if payment was successful
+    if (transactionData.status !== "successful") {
+      return res.status(400).json({
+        success: false,
+        message: "Payment was not successful",
+        transactionStatus: transactionData.status,
+      });
+    }
+
+    // Verify amount matches (500 Naira)
+    const expectedAmount = 500;
+    if (parseFloat(transactionData.amount) !== expectedAmount) {
+      return res.status(400).json({
+        success: false,
+        message: `Payment amount mismatch. Expected ${expectedAmount} Naira, got ${transactionData.amount}`,
+      });
+    }
+
+    // Find user by payment reference
+    const user = await User.findOne({ "plan.paymentReference": tx_ref });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found for this payment reference",
+      });
+    }
+
+    // Check if payment was already verified
+    if (user.status === "active" && user.plan.status === "active") {
+      // Payment already verified, return success
+      const tokens = generateTokens(user._id, user.email, user.role);
+      const userResponse = user.toObject();
+      delete userResponse.password;
+
+      return res.status(200).json({
+        success: true,
+        message: "Payment already verified. Account is active.",
+        data: {
+          user: userResponse,
+          tokens,
+        },
+      });
+    }
+
+    // Find and update payment record
+    const payment = await Payment.findOne({ transactionRef: tx_ref });
+    if (payment) {
+      payment.status = "completed";
+      payment.externalRef = transaction_id;
+      payment.gatewayResponse = verificationResponse.data;
+      payment.completedAt = new Date();
+      payment.verified = true;
+      payment.verifiedAt = new Date();
+      
+      // Extract card details if available
+      if (transactionData.card) {
+        payment.cardDetails = {
+          last4: transactionData.card.last_4digits,
+          cardType: transactionData.card.type,
+          cardBrand: transactionData.card.issuer,
+        };
+      }
+      
+      await payment.save();
+    }
+
+    // Activate user account
+    user.status = "active";
+    user.plan.status = "active";
+    user.plan.type = "premium";
+    user.plan.paymentTransactionId = transaction_id;
+    user.plan.paymentVerifiedAt = new Date();
+    user.plan.startDate = new Date();
+    // Set plan end date to 1 year from now (or adjust as needed)
+    user.plan.endDate = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+    
+    // Set premium plan features
+    user.plan.features = {
+      maxInvoices: -1, // Unlimited
+      maxClients: -1, // Unlimited
+      maxInventoryItems: -1, // Unlimited
+      advancedAnalytics: true,
+      multiUser: true,
+    };
+
+    await user.save();
+
+    // Generate JWT tokens
+    const tokens = generateTokens(user._id, user.email, user.role);
+
+    // Remove password from response
+    const userResponse = user.toObject();
+    delete userResponse.password;
+
+    res.status(200).json({
+      success: true,
+      message: "Payment verified successfully. Your account has been activated!",
+      data: {
+        user: userResponse,
+        tokens,
+      },
+    });
+  } catch (error) {
+    console.error("Verify signup payment error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error verifying payment",
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   register,
+  registerWithPayment,
+  verifySignupPayment,
   login,
   refreshToken,
   logout,

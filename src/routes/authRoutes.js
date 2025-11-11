@@ -2,6 +2,8 @@ const express = require("express");
 const router = express.Router();
 const {
   register,
+  registerWithPayment,
+  verifySignupPayment,
   login,
   refreshToken,
   logout,
@@ -20,9 +22,19 @@ const { authLimiter } = require("../config/rateLimiter");
  */
 
 // @route   POST /api/auth/register
-// @desc    Register a new user
+// @desc    Register a new user (legacy endpoint - use register-with-payment for premium signup)
 // @access  Public
 router.post("/register", authLimiter, register);
+
+// @route   POST /api/auth/register-with-payment
+// @desc    Register a new user and initiate premium plan payment (500 Naira)
+// @access  Public
+router.post("/register-with-payment", authLimiter, registerWithPayment);
+
+// @route   POST /api/auth/verify-signup-payment
+// @desc    Verify signup payment and activate user account
+// @access  Public
+router.post("/verify-signup-payment", authLimiter, verifySignupPayment);
 
 // @route   POST /api/auth/login
 // @desc    Login user
