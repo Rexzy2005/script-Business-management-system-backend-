@@ -613,7 +613,7 @@ const verifyEmail = async (req, res) => {
 
 /**
  * @route   POST /api/auth/register-with-payment
- * @desc    Register a new user and initiate premium plan payment (500 Naira)
+ * @desc    Register a new user and initiate premium plan payment (200 Naira)
  * @access  Public
  */
 const registerWithPayment = async (req, res) => {
@@ -679,7 +679,7 @@ const registerWithPayment = async (req, res) => {
 
     // Generate transaction reference for payment
     const tx_ref = `SIGNUP-${Date.now()}-${user._id.toString().slice(-6)}`;
-    const amount = 500; // 500 Naira premium plan
+    const amount = 200; // 200 Naira premium plan
 
     // Initialize Flutterwave payment
     const flutterwavePayload = {
@@ -694,7 +694,7 @@ const registerWithPayment = async (req, res) => {
       },
       customizations: {
         title: "Premium Plan Signup - Script Business Management",
-        description: "Premium plan subscription payment (₦500)",
+        description: "Premium plan subscription payment (₦200)",
         logo: process.env.BUSINESS_LOGO || "",
       },
       meta: {
@@ -707,6 +707,17 @@ const registerWithPayment = async (req, res) => {
     // Call Flutterwave API to initialize payment
     let flutterwaveResponse;
     try {
+      // Verify Flutterwave secret key is configured
+      if (!process.env.FLUTTERWAVE_SECRET_KEY) {
+        console.error("❌ FLUTTERWAVE_SECRET_KEY is not set in environment variables");
+        await User.findByIdAndDelete(user._id);
+        return res.status(500).json({
+          success: false,
+          message: "Payment gateway configuration error. Please contact support.",
+          error: "FLUTTERWAVE_SECRET_KEY not configured",
+        });
+      }
+
       flutterwaveResponse = await axios.post(
         "https://api.flutterwave.com/v3/payments",
         flutterwavePayload,
@@ -719,12 +730,19 @@ const registerWithPayment = async (req, res) => {
       );
     } catch (error) {
       console.error("Flutterwave API error:", error.response?.data || error.message);
+      console.error("Flutterwave Secret Key configured:", !!process.env.FLUTTERWAVE_SECRET_KEY);
+      console.error("Flutterwave Secret Key preview:", process.env.FLUTTERWAVE_SECRET_KEY ? `${process.env.FLUTTERWAVE_SECRET_KEY.substring(0, 10)}...` : "NOT SET");
+      
       // Delete the user if payment initialization fails
       await User.findByIdAndDelete(user._id);
+      
+      const errorMessage = error.response?.data?.message || error.message;
       return res.status(500).json({
         success: false,
-        message: "Failed to initialize payment. Please try again.",
-        error: error.response?.data?.message || error.message,
+        message: errorMessage === "Invalid authorization key" 
+          ? "Payment gateway authentication failed. Please verify Flutterwave credentials are configured correctly."
+          : "Failed to initialize payment. Please try again.",
+        error: errorMessage,
       });
     }
 
@@ -828,8 +846,8 @@ const verifySignupPayment = async (req, res) => {
       });
     }
 
-    // Verify amount matches (500 Naira)
-    const expectedAmount = 500;
+    // Verify amount matches (200 Naira)
+    const expectedAmount = 200;
     if (parseFloat(transactionData.amount) !== expectedAmount) {
       return res.status(400).json({
         success: false,

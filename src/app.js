@@ -21,8 +21,9 @@ const app = express();
 // ---------------------------
 // ✅ Trust Proxy (Required for Render.com and other proxies)
 // ---------------------------
-// Enable trust proxy to work behind reverse proxies (Render.com, Nginx, etc.)
-app.set('trust proxy', true);
+// Trust only the first proxy (Render's load balancer) for security
+// This prevents rate limiting bypass while still working behind proxies
+app.set('trust proxy', 1);
 
 // ---------------------------
 // ✅ Security & Middleware
