@@ -35,8 +35,7 @@ app.use(helmet());
 const allowedOrigins = [
   "*", // allow all origins
   "http://localhost:8080", // dev frontend
-  "https://script-frontend.vercel.app", 
-  "https://script-business-management-system-f.vercel.app", // alternate vercel domain if applicable
+  "https://scripttool.vercel.app",
 ];
 
 // Dynamic CORS setup
