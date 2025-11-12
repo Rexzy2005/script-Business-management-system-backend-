@@ -1,1 +1,4 @@
-remove the settings and preference from the profile page and take it to the settings page and the make the settings page functional then remove the unessesary things in the app functional, then add a language preference for hause, english, and youroba, igbo ready for the backend integration for the languages
+now i want you to give every button an loading state which will disable it of click until the task is perform and i want all form values to be reset and set the placeholders of the number inputs to be 0 except for explanations place holder and also , i want you to fix this Rate Limit Active
+Too many requests. Please wait 29s before trying again.
+
+Requests in last minute: 4/300
