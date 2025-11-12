@@ -35,6 +35,7 @@ app.use(helmet());
 const allowedOrigins = [
   "*", // allow all origins
   "http://localhost:8080", // dev frontend
+  "https://scripttool.vercel.app",
   "https://script-frontend.vercel.app", 
   "https://script-business-management-system-f.vercel.app", // alternate vercel domain if applicable
 ];
